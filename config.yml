@@ -1,0 +1,10 @@
+project_id: your-project-id-here
+
+# Region where resources will be created (choose one close to your users)
+region: asia-southeast1
+
+# Name of the Cloud Run service
+service_name: image-search
+
+# Bucket name – use ${timestamp} to ensure uniqueness; the script will replace it
+bucket_name: image-search-${timestamp}

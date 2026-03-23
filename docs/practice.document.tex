@@ -1,0 +1,190 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{vietnam}
+\usepackage{geometry}
+\geometry{left=2.5cm,right=2.5cm,top=2.5cm,bottom=2.5cm}
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=blue,
+}
+\definecolor{codebg}{rgb}{0.95,0.95,0.95}
+\lstset{
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    language=bash,
+    showstringspaces=false,
+}
+
+\title{\textbf{Get Your Head In The Cloud with Google Cloud Platform} \\ \textit{Practical Session - Building a Serverless Image Search Engine on GCP}}
+% \author{Nguyen Hoang Long \\ \texttt{longnguyenhoang.personal@gmail.com}}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\tableofcontents
+\newpage
+
+\section{Introduction}
+In this hands‑on session, you will build a simple but complete \textbf{image search engine}. Users can upload images with descriptive keywords, and later search for images using those keywords. The application runs entirely on Google Cloud Platform (GCP) using two core services:
+
+\begin{itemize}
+    \item \textbf{Cloud Storage} – stores uploaded images and a metadata file that maps keywords to image URLs.
+    \item \textbf{Cloud Run} – runs the web application (written in Python/Flask) without you having to manage any servers.
+\end{itemize}
+
+The solution is \textbf{serverless}: it scales automatically from zero to many instances based on traffic, and you pay only for what you use. By the end of this session, you will have deployed a real, publicly accessible application on GCP.
+
+\section{Prerequisites}
+Before starting, ensure you have:
+\begin{itemize}
+    \item A Google account.
+    \item A GCP project with billing enabled (you can use the \$300 free trial).
+    \item Access to the \href{https://console.cloud.google.com}{Google Cloud Console}.
+\end{itemize}
+All commands will be run from \textbf{Cloud Shell}, which is a free Linux environment built into the console. It already has the \texttt{gcloud} CLI and other tools pre‑installed.
+
+\section{Step-by-step implementation}
+
+\subsection*{Step 1: Open \texttt{Cloud Shell} and enable APIs}
+\begin{enumerate}
+    \item Go to \url{https://console.cloud.google.com}.
+    \item Make sure you are in the correct project (create one if needed).
+    \item Click the \texttt{>\_} icon in the top right corner to open Cloud Shell. A terminal will appear at the bottom of the page.
+    \item Enable the required APIs:
+\begin{lstlisting}
+gcloud services enable storage.googleapis.com run.googleapis.com
+\end{lstlisting}
+    This command allows your project to use Cloud Storage and Cloud Run.
+\end{enumerate}
+
+\subsection*{Step 2: Create a Cloud Storage Bucket}
+A bucket is a container for your files (images and metadata). The name must be globally unique, so we will append a timestamp.
+\begin{lstlisting}
+BUCKET_NAME="image-search-$(date +%s)"
+gsutil mb gs://$BUCKET_NAME
+\end{lstlisting}
+Verify the bucket was created:
+\begin{lstlisting}
+gsutil ls
+\end{lstlisting}
+You should see your bucket name listed.
+
+\subsection*{Step 3: Prepare the application code}
+We will create a new directory and write a Python web application using Flask.
+
+\begin{lstlisting}
+mkdir image-search && cd image-search
+\end{lstlisting}
+
+Create the main application file \texttt{app.py}:
+
+\textbf{Explanation of the code:}
+\begin{itemize}
+    \item The app uses Flask to serve two main endpoints:
+        \begin{itemize}
+            \item \texttt{/} – displays the upload form and search results.
+            \item \texttt{/upload} – handles image uploads, stores the image in Cloud Storage, and updates the metadata file.
+            \item \texttt{/search} – reads the metadata and returns matching images.
+        \end{itemize}
+    \item Metadata is stored in a JSON file (\texttt{keywords.json}) inside the bucket. Each keyword maps to a list of image URLs and associated information.
+    \item Cloud Storage is accessed via the \texttt{google-cloud-storage} client library.
+\end{itemize}
+
+Now create the \texttt{requirements.txt} file:
+\begin{lstlisting}
+Flask==2.3.3
+google-cloud-storage==2.9.0
+gunicorn==21.2.0
+\end{lstlisting}
+
+Finally, create a \texttt{Dockerfile} to define the container environment:
+\begin{lstlisting}
+FROM python:3.9-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+CMD exec gunicorn --bind :$PORT --workers 1 --threads 8 app:app
+\end{lstlisting}
+
+\subsection*{Step 4: Deploy to Cloud Run}
+Now we will deploy the application. Cloud Run will automatically build the container from your source code and run it.
+\begin{lstlisting}
+gcloud run deploy image-search \
+  --source . \
+  --platform managed \
+  --region asia-southeast1 \
+  --allow-unauthenticated \
+  --set-env-vars BUCKET_NAME=$BUCKET_NAME
+\end{lstlisting}
+
+\textbf{What each flag does:}
+\begin{itemize}
+    \item \texttt{--source .} – tells Cloud Run to build the image from the current directory.
+    \item \texttt{--platform managed} – uses the fully managed Cloud Run environment (no clusters to manage).
+    \item \texttt{--region asia-southeast1} – deploys the service in Singapore, which is close to Vietnam for low latency.
+    \item \texttt{--allow-unauthenticated} – makes the service publicly accessible (no login required).
+    \item \texttt{--set-env-vars} – passes the bucket name to the application as an environment variable.
+\end{itemize}
+
+After a few moments, the command will output a URL, e.g., \texttt{https://image-search-xxxxx-uc.a.run.app}. Open this URL in your browser.
+
+\subsection*{Step 5: Test your application}
+\begin{enumerate}
+    \item You should see a page with an upload form and a search box.
+    \item Upload an image. Enter some keywords separated by commas, e.g., \texttt{meme, funny}.
+    \item After uploading, you will be redirected back to the home page.
+    \item Try searching for one of the keywords you used. You should see the image(s) you uploaded.
+    \item Upload another image with different keywords and verify that searching works.
+\end{enumerate}
+
+You can also explore the bucket in the Cloud Console:
+\begin{itemize}
+    \item Go to \textbf{Cloud Storage} → \textbf{Buckets}.
+    \item Click on your bucket name.
+    \item You will see a folder \texttt{images/} containing the uploaded files, and a file \texttt{keywords.json} that holds the search index.
+\end{itemize}
+
+\subsection*{Step 6: Clean up (important)}
+To avoid incurring charges after the session, delete the resources you created.
+\begin{lstlisting}
+# Delete all files in the bucket and then the bucket itself
+gsutil rm -r gs://$BUCKET_NAME
+
+# Delete the Cloud Run service
+gcloud run services delete image-search --region asia-southeast1 --quiet
+\end{lstlisting}
+If you no longer need the project, you can delete it from the Cloud Console.
+
+\section{What You Learned}
+\begin{itemize}
+    \item How to create a Cloud Storage bucket and upload files.
+    \item How to deploy a serverless web application using Cloud Run.
+    \item How to use Python and Flask to interact with Cloud Storage.
+    \item A practical example of separating data (images, metadata) from application logic.
+\end{itemize}
+
+\section{Possible Enhancements}
+If you want to explore further, consider these extensions:
+\begin{itemize}
+    \item Add authentication so only authorized users can upload.
+    \item Use Firestore instead of a JSON file for better concurrency and scalability.
+    \item Automatically generate thumbnail images using Cloud Functions.
+    \item Add a simple voting system for memes.
+\end{itemize}
+
+\vspace{1cm}
+\begin{center}
+\textbf{Arigathanks for participating!} \\
+Happy cloud building!
+\end{center}
+
+\end{document}
