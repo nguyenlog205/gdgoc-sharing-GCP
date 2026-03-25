@@ -1,136 +1,158 @@
 import os
 import json
 import uuid
+import yaml
+import argparse
 from flask import Flask, request, render_template_string, redirect, url_for
 from google.cloud import storage
 
-app = Flask(__name__)
-BUCKET_NAME = os.environ.get("BUCKET_NAME")
+# ==============================================
+# CONFIG LOADER 
+# ==============================================
+parser = argparse.ArgumentParser()
+parser.add_argument("--config", type=str, required=True)
+args = parser.parse_args()
 
-# HTML template embedded for simplicity
+with open(args.config, 'r') as f:
+    cfg = yaml.safe_load(f)
+
+app = Flask(__name__)
+
+# ==============================================
+# STORAGE LOGIC
+# ==============================================
+def get_client():
+    return storage.Client(project=cfg.get('project_id'))
+
+def initialize_bucket():
+    client = get_client()
+    bucket = client.bucket(cfg['bucket_name'])
+    if not bucket.exists():
+        client.create_bucket(bucket, location=cfg['region'])
+
+def get_keywords():
+    bucket = get_client().bucket(cfg['bucket_name'])
+    blob = bucket.blob(cfg['keywords_file'])
+    return json.loads(blob.download_as_text()) if blob.exists() else {}
+
+def save_keywords(data):
+    bucket = get_client().bucket(cfg['bucket_name'])
+    blob = bucket.blob(cfg['keywords_file'])
+    blob.upload_from_string(json.dumps(data), content_type="application/json")
+
+# ==============================================
+# UI TEMPLATE 
+# ==============================================
 HTML = """
 <!doctype html>
 <html>
 <head>
-    <title>Image Search</title>
+    <title>{{ service_name }}</title>
     <style>
-        body { font-family: sans-serif; margin: 20px; }
-        .upload-form { border: 1px solid #ccc; padding: 20px; margin-bottom: 20px; }
-        .image-grid { display: flex; flex-wrap: wrap; gap: 20px; }
-        .image-card { border: 1px solid #ddd; padding: 10px; text-align: center; }
-        img { max-width: 200px; max-height: 200px; }
-        .keyword-badge { background: #eee; padding: 2px 6px; border-radius: 4px; margin: 2px; display: inline-block; }
-        a { text-decoration: none; color: #0066cc; }
+        :root {
+            --google-blue: #4285F4; --google-red: #EA4335;
+            --google-yellow: #FBBC05; --google-green: #34A853;
+            --bg: #ffffff; --text: #202124; --gray: #f1f3f4;
+        }
+        body { font-family: 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); margin: 0; display: flex; justify-content: center; }
+        .container { width: 100%; max-width: 800px; padding: 60px 20px; }
+        
+        /* GDGoC Dots */
+        .dots { display: flex; gap: 5px; margin-bottom: 10px; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; }
+        
+        h1 { font-size: 28px; font-weight: 500; margin: 0 0 40px 0; letter-spacing: -0.5px; }
+        
+        /* Minimalist Form */
+        .upload-zone { background: var(--gray); padding: 30px; border-radius: 16px; margin-bottom: 40px; }
+        input[type="text"], input[type="file"] { width: 100%; padding: 12px; margin: 8px 0; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; }
+        
+        button { background: var(--google-blue); color: white; border: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: 0.2s; }
+        button:hover { opacity: 0.8; }
+        
+        .search-bar { display: flex; gap: 10px; margin-bottom: 50px; }
+        .search-bar input { flex-grow: 1; margin: 0; }
+
+        /* Grid */
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 20px; }
+        .card { border-radius: 12px; overflow: hidden; border: 1px solid var(--gray); transition: 0.3s; }
+        .card:hover { transform: translateY(-5px); box-shadow: 0 10px 20px rgba(0,0,0,0.05); }
+        .card img { width: 100%; height: 200px; object-fit: cover; border-bottom: 1px solid var(--gray); }
+        .card-tags { padding: 12px; display: flex; flex-wrap: wrap; gap: 5px; }
+        .tag { font-size: 11px; background: var(--gray); padding: 4px 10px; border-radius: 20px; color: #5f6368; }
     </style>
 </head>
 <body>
-    <h1>🔍 Image Search</h1>
+    <div class="container">
+        <div class="dots">
+            <div class="dot" style="background:var(--google-blue)"></div>
+            <div class="dot" style="background:var(--google-red)"></div>
+            <div class="dot" style="background:var(--google-yellow)"></div>
+            <div class="dot" style="background:var(--google-green)"></div>
+        </div>
+        <h1>{{ service_name }}</h1>
 
-    <div class="upload-form">
-        <h2>Upload an Image</h2>
-        <form method="post" enctype="multipart/form-data" action="/upload">
-            <input type="file" name="file" accept="image/*" required><br><br>
-            Keywords (comma separated): <input type="text" name="keywords" placeholder="e.g., cat, funny, meme" required><br><br>
-            <button type="submit">Upload</button>
+        <div class="upload-zone">
+            <form method="post" enctype="multipart/form-data" action="/upload">
+                <input type="file" name="file" accept="image/*" required>
+                <input type="text" name="keywords" placeholder="Keywords (e.g. AI, UIT, Google)" required>
+                <button type="submit">Upload Image</button>
+            </form>
+        </div>
+
+        <form class="search-bar" method="get" action="/search">
+            <input type="text" name="keyword" placeholder="Search by keyword..." required>
+            <button type="submit" style="background:#202124">Search</button>
         </form>
-    </div>
 
-    <div>
-        <h2>Search by Keyword</h2>
-        <form method="get" action="/search">
-            <input type="text" name="keyword" placeholder="Enter keyword" required>
-            <button type="submit">Search</button>
-        </form>
-    </div>
-
-    {% if keyword %}
-        <h2>Results for "{{ keyword }}"</h2>
-        {% if images %}
-            <div class="image-grid">
+        {% if keyword %}
+            <div class="grid">
             {% for img in images %}
-                <div class="image-card">
-                    <img src="{{ img.url }}" alt="{{ img.filename }}">
-                    <p>{{ img.filename }}</p>
-                    <div>
-                        {% for kw in img.keywords %}
-                            <span class="keyword-badge">{{ kw }}</span>
-                        {% endfor %}
+                <div class="card">
+                    <img src="{{ img.url }}">
+                    <div class="card-tags">
+                        {% for kw in img.keywords %}<span class="tag">#{{ kw }}</span>{% endfor %}
                     </div>
                 </div>
             {% endfor %}
             </div>
-        {% else %}
-            <p>No images found for "{{ keyword }}".</p>
         {% endif %}
-    {% endif %}
+    </div>
 </body>
 </html>
 """
 
-def read_keywords():
-    client = storage.Client()
-    bucket = client.bucket(BUCKET_NAME)
-    blob = bucket.blob("keywords.json")
-    if not blob.exists():
-        return {}
-    content = blob.download_as_text()
-    return json.loads(content)
-
-def write_keywords(data):
-    client = storage.Client()
-    bucket = client.bucket(BUCKET_NAME)
-    blob = bucket.blob("keywords.json")
-    blob.upload_from_string(json.dumps(data), content_type="application/json")
-
+# ==============================================
+# ROUTE
+# ==============================================
 @app.route('/')
 def index():
-    return render_template_string(HTML, keyword=None, images=None)
+    return render_template_string(HTML, service_name=cfg['service_name'], keyword=None)
 
 @app.route('/upload', methods=['POST'])
 def upload():
-    if 'file' not in request.files:
-        return "No file part", 400
-    file = request.files['file']
-    if file.filename == '':
-        return "No selected file", 400
-
-    keywords_str = request.form.get('keywords', '')
-    keywords = [kw.strip().lower() for kw in keywords_str.split(',') if kw.strip()]
-
-    ext = file.filename.rsplit('.', 1)[-1].lower()
-    if ext not in ['jpg', 'jpeg', 'png', 'gif']:
-        return "Unsupported file type", 400
-    filename = f"{uuid.uuid4().hex}.{ext}"
-    blob_path = f"images/{filename}"
-
-    client = storage.Client()
-    bucket = client.bucket(BUCKET_NAME)
-    blob = bucket.blob(blob_path)
+    file = request.files.get('file')
+    kws = [k.strip().lower() for k in request.form.get('keywords', '').split(',') if k.strip()]
+    
+    filename = f"{uuid.uuid4().hex}.{file.filename.split('.')[-1]}"
+    blob = get_client().bucket(cfg['bucket_name']).blob(f"{cfg['upload_folder']}{filename}")
+    
     blob.upload_from_file(file, content_type=file.content_type)
     blob.make_public()
-    image_url = blob.public_url
-
-    keywords_data = read_keywords()
-    for kw in keywords:
-        if kw not in keywords_data:
-            keywords_data[kw] = []
-        keywords_data[kw].append({
-            "url": image_url,
-            "filename": filename,
-            "keywords": keywords
-        })
-    write_keywords(keywords_data)
-
+    
+    data = get_keywords()
+    for kw in kws:
+        if kw not in data: data[kw] = []
+        data[kw].append({"url": blob.public_url, "keywords": kws})
+    save_keywords(data)
     return redirect(url_for('index'))
 
 @app.route('/search')
 def search():
-    keyword = request.args.get('keyword', '').strip().lower()
-    if not keyword:
-        return redirect(url_for('index'))
-    keywords_data = read_keywords()
-    images = keywords_data.get(keyword, [])
-    return render_template_string(HTML, keyword=keyword, images=images)
+    kw = request.args.get('keyword', '').lower()
+    images = get_keywords().get(kw, [])
+    return render_template_string(HTML, service_name=cfg['service_name'], keyword=kw, images=images)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
+    initialize_bucket()
+    app.run(host=cfg['host'], port=cfg['port'], debug=cfg['debug'])

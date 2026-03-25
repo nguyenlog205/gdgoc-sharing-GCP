@@ -1,10 +1,21 @@
-project_id: your-project-id-here
+# ================================
+# GCP Metadata
+# ================================
+project_id: "<REPLACE-YOUR-ID-THERE>"
+region: "asia-southeast1"
+service_name: "GDGoC-UIT | Image Search"
 
-# Region where resources will be created (choose one close to your users)
-region: asia-southeast1
+# ================================
+# Storage Settings
+# ================================
+bucket_name: "gdgoc_uit_cloudsharing"
+keywords_file: "keywords.json"
+upload_folder: "images/"
 
-# Name of the Cloud Run service
-service_name: image-search
-
-# Bucket name – use ${timestamp} to ensure uniqueness; the script will replace it
-bucket_name: image-search-${timestamp}
+# ================================
+# Server Settings
+# ================================
+host: "0.0.0.0"
+port: 8080
+debug: true
+allowed_extensions: ["jpg", "jpeg", "png", "gif"]
